@@ -1,0 +1,91 @@
+name: build
+
+on:
+  # Cut an image on every published GitHub release. The release's semver git
+  # tag (e.g. v1.0.0) becomes the version token in the image tag.
+  release:
+    types: [published]
+  workflow_dispatch:
+
+# Deny all by default; each job opts into the minimum it needs.
+permissions: {}
+
+env:
+  REGISTRY: ghcr.io
+  # Published as ghcr.io/<owner>/openldap even though the repo is
+  # <owner>/container-openldap.
+  IMAGE_NAME: ${{ github.repository_owner }}/openldap
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build once for the runner's architecture so we can read the exact
+      # OpenLDAP version Debian shipped. Shares the gha cache with the final
+      # multi-arch build below, so no layer work is repeated.
+      - name: Probe build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          load: true
+          tags: openldap:probe
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Compute tags
+        id: tags
+        run: |
+          set -euo pipefail
+
+          pkg="$(docker run --rm --entrypoint dpkg-query openldap:probe -W -f='${Version}' slapd)"
+          ldap="$(printf '%s' "$pkg" | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+')"
+          minor="$(printf '%s' "$ldap" | cut -d. -f1-2)"
+          echo "Detected OpenLDAP ${ldap} (package ${pkg})"
+
+          img="${REGISTRY}/${IMAGE_NAME}"
+          {
+            echo "tags<<EOF"
+            # On a published release, emit the immutable <openldap>-<semver> tag.
+            if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+              release="${GITHUB_REF_NAME#v}"
+              echo "${img}:${ldap}-${release}"
+            fi
+            echo "${img}:${ldap}"
+            echo "${img}:${minor}"
+            echo "${img}:latest"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Docker metadata (labels)
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+
+      - name: Build and push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
