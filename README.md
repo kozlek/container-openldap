@@ -60,6 +60,20 @@ OpenLDAP version, and — for releases — the semver release it was cut from:
 | `<major.minor>` | `2.6` | Floating: newest build of that OpenLDAP minor. |
 | `latest` | — | Floating: newest build overall. |
 
+### OpenLDAP version policy
+
+The OpenLDAP version is **not pinned in this repo** — it is whatever `slapd`
+Debian trixie ships, and the build workflow reads it back out of the image with
+`dpkg-query` to compute the tags. So the `<openldap>` token tracks Debian
+stable, not upstream: trixie has shipped `2.6.10+dfsg-1` since its release and
+Debian only rebases OpenLDAP in a new stable (forky currently carries 2.6.14),
+backporting security fixes into 2.6.10 in place if any warrant it.
+
+A newer upstream 2.6.x therefore does *not* mean this image is behind on
+security fixes. Cutting a release rebuilds against a refreshed base image and
+`trixie-security`, which is what picks up patches; the `<openldap>` token only
+moves when Debian moves.
+
 ## Importing existing data
 
 To load an existing directory, export it to LDIF (entries and `userPassword`
